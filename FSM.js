@@ -52,10 +52,24 @@
 		this.stop();
 	}
 
+	const tryCallback = (callback, fsmState) => {
+		return (...args) => {
+			try {
+				callback && callback(...args);
+			}
+			// do not consume callback exceptions
+			finally {
+				return fsmState;
+			}
+		}
+	}
+
 	FSM.prototype.stop  = function() {
 		this.promise = this.promise.then( (_) => { 
-			this.onSettle && this.onSettle(this.idle, "FSM stopped" );
-			return this.idle;
+			return tryCallback(this.onSettle, this.idle)(this.idle, "FSM stopped");
+
+//			this.onSettle && this.onSettle(this.idle, "FSM stopped" );
+//			return this.idle;
 		})
 	}
 
@@ -74,38 +88,41 @@
 	FSM.prototype.inputSignal = function(sig) {
 		let result;
 
-		if (!this.promise) {
-			throw("FSM not initialized. run init() before run().")
-		}
+//		if (!this.promise) {
+//			throw("FSM not initialized. call init() before run().")
+//		}
 
 		this.promise = this.promise.then( state => {
-			console.log("before transition: ", state);
 			
 			if (sig === undefined)	// use undefined signal for FSM.run() 
 				return sig === undefined && state === this.idle ? this.awaiting : state;
 
-
 			let transition = state.getTransition(sig.id);
 
 			if ( transition ) {
-				this.onLeave && this.onLeave(state);
-				
-				try	{	
-					transition.callback && (result = transition.callback(sig.callbackArgs));
-		
-					return transition.nextState;
+				try {
+					this.onLeave && this.onLeave(state);
 				}
-				catch (error) {
-					result = error;
+				// do not consume callback exceptions
+				finally	{
+					try	{	
+						transition.callback && (result = transition.callback(sig.callbackArgs));
+			
+						return transition.nextState;
+					}
+					catch (error) {
+						result = error;
 
-					return transition.failureState || state;
+						return transition.failureState || state;
+					}
 				}
 			}
 			return state;		
 		})
-		.then( state => { this.onSettle && this.onSettle(state, result); return state; });
+		.then( state => { return tryCallback(this.onSettle, state)(state, result); });
+//		.then( state => { this.onSettle && this.onSettle(state, result); return state; });
+			
 
-	//	.then( state => { console.log("after transition:"); this.printState(state); return state;} );
 	}
 //})();
 //import * as AP from '/static/FSM.js'      
