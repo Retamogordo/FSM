@@ -51,6 +51,7 @@
 	}
 
 	FSM = function() {
+		console.log("FSM")
 		this.idle = new State(-1, "Idle");
 		this.awaiting = new State(0, "Running, awaiting signals");
 
@@ -155,55 +156,67 @@
 
 //		.then( state => {  this.onSettle(state, result); return state; });
 			
-
 	}
 //})()
+function ShiftRegisterFSM(length, transitionDelay) {
+	console.log("in ShiftRegisterFSM")
+	FSM.call(this);
+
+	this.length = length;
+	this.transitionDelay = transitionDelay;
+}
+
+ShiftRegisterFSM.prototype = Object.create(FSM.prototype);
+ShiftRegisterFSM.prototype.constructor = ShiftRegisterFSM;
+ShiftRegisterFSM.shiftSignalID = 100;
+ShiftRegisterFSM.resetSignalID = 101;
+
+ShiftRegisterFSM.prototype.init = function () {
+	let state = this.awaiting;
+	let firstState;
+	let id = 1;
+	let newState;
+	let length = this.length;
+
+	let states = [];
+	while (length--) {
+		newState = state.chain( ShiftRegisterFSM.shiftSignalID, State.from({ id, name: "shiftState" + id}));
+//		newState = state.chain( 100, State.from({ id, name: "shiftState" + id, on: shiftCallback}));
+		state.getTransition(ShiftRegisterFSM.shiftSignalID).delay = this.transitionDelay;
+
+		firstState = firstState || newState;
+		
+		newState.chain( ShiftRegisterFSM.resetSignalID, this.awaiting); // reset
+
+		state = newState;
+		
+		++id;
+
+		states.push(state);
+	}
+
+	if (firstState) {
+		state.chain( ShiftRegisterFSM.shiftSignalID, firstState).chain( ShiftRegisterFSM.resetSignalID, shiftRegFSM.awaiting);
+		state.getTransition(ShiftRegisterFSM.shiftSignalID).delay = this.transitionDelay;
+//	state !== shiftRegFSM.awaiting && shiftRegFSM.states.push(state);
+//		this.states.set(state.id, state);
+	}
+	console.log(states);
+
+	FSM.prototype.init.call(this, states);
+}
 
 let fsm1 = new FSM();
 let fsm2 = new FSM();
-let shiftRegFSM = new FSM();
+let shiftRegFSM = new ShiftRegisterFSM(3, 1000);
 
 
 const shiftCallback = transitionCallbackResult => { console.log("Shift to", this.name)}
 
-function chainShiftReg(length, transitionDelay) {
-	let state = shiftRegFSM.awaiting;
-	let firstState;
-	let id = 1;
-	let newState;
-
-//	shiftRegFSM.awaiting.name = "shiftState0";
-//	shiftRegFSM.awaiting.on = shiftCallback;
-	
-	shiftRegFSM.length = length;
-
-	while (length--) {
-		newState = state.chain( 100, State.from({ id, name: "shiftState" + id}));
-//		newState = state.chain( 100, State.from({ id, name: "shiftState" + id, on: shiftCallback}));
-		state.getTransition(100).delay = transitionDelay;
-
-		firstState = firstState || newState;
-		
-		newState.chain( 101, shiftRegFSM.awaiting); // reset
-
-		state = newState;
-
-		shiftRegFSM.states.set(state.id, state);
-		
-		++id;
-	}
-	if (firstState) {
-		state.chain( 100, firstState).chain( 101, shiftRegFSM.awaiting);
-		state.getTransition(100).delay = transitionDelay;
-//	state !== shiftRegFSM.awaiting && shiftRegFSM.states.push(state);
-		shiftRegFSM.states.set(state.id, state);
-	}
-
-	shiftRegFSM.stop();
-}
 
 shiftRegFSM.onSettle = (state, val) => {console.log("Settled: ", state.name);}
-chainShiftReg(3, 1000)
+//chainShiftReg(3, 1000)
+shiftRegFSM.init();
 shiftRegFSM.run();
 shiftRegFSM.inputSignal({id: 100});
 shiftRegFSM.inputSignal({id: 100});
@@ -211,6 +224,8 @@ shiftRegFSM.inputSignal({id: 100});
 shiftRegFSM.inputSignal({id: 100});
 shiftRegFSM.inputSignal({id: 100});
 shiftRegFSM.inputSignal({id: 100});
+
+console.log(shiftRegFSM.shiftState1)
 
 
 const firstCallback = transitionCallbackResult => { console.log("first settled")}
