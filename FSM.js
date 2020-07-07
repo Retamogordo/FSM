@@ -6,11 +6,20 @@
 		this.failureState = transitionFailureState;
 	}
 
-	State = function(id, description) {
+	State = function(id, description, onCallback) {
 		this.id = id;
 		this.description = description;
+		this.on = onCallback;
 		
 		this.transitionMap = new Map();
+	}
+
+	State.from = function(obj) {
+//		let state = new State(obj.id, obj.description, obj.onCallback);
+		let state = new State();
+		Object.assign(state, obj);
+
+		return state;
 	}
 
 	State.prototype.addTransition = function(signalID, transition) {
@@ -19,7 +28,10 @@
 	};
 
 	State.prototype.getTransition = function(sig) {
+	try {
 		return this.transitionMap.get(sig);
+			}
+	catch(err) {console.log(err)}
 	}
 
 	State.prototype.chain = function(signalId, toState, transitionCallback, failureState) {
@@ -37,6 +49,8 @@
 		this.idle = new State(-1, "Idle");
 		this.awaiting = new State(0, "Running, awaiting signals");
 
+		this.idle.chain(FSM.prototype.runFSMSignal.id, this.awaiting);
+	
 		this.states = new Map();
 		this.states.set(this.idle.id, this.idle);
 		this.states.set(this.awaiting.id, this.awaiting);
@@ -46,12 +60,36 @@
 						});
 	}
 
-	FSM.prototype.init = function( states ) {
-		states.forEach( val => this.states.set(val.id, val) );
+	FSM.prototype.runFSMSignal = {id: -1};
 
+	FSM.prototype.init = function( objStates ) {
+		let state;
+
+		if (objStates instanceof Array) {
+			objStates.forEach( st => {
+				st = st instanceof State ? st : State.from(st);
+				this.states.set(st.id, st);
+
+				if (st.name) this[st.name] = st;
+			} )
+		}
+		else {
+			Object.keys(objStates).forEach( key => {
+				state = State.from(objStates[key]);
+				this.states.set(state.id, state);
+				this[key] = state;
+			});
+		}
 		this.stop();
 	}
 
+/*
+	FSM.prototype.initFrom(objects) {
+		objects.map() obj => {
+			state = State.from(obj)
+
+	}
+*/
 	const tryCallback = (callback, fsmState) => {
 		return (...args) => {
 			try {
@@ -66,39 +104,25 @@
 
 	FSM.prototype.stop  = function() {
 		this.promise = this.promise.then( (_) => { 
-			return tryCallback(this.onSettle, this.idle)(this.idle, "FSM stopped");
+			return tryCallback(this.onIdle, this.idle)(this.idle, "FSM stopped");
 
 //			this.onSettle && this.onSettle(this.idle, "FSM stopped" );
 //			return this.idle;
 		})
 	}
 
-	FSM.prototype.add = function( state ) {
-		this.states.set(state.id, state);
-	}
-
-	FSM.prototype.printState = function() {
-		this.promise = this.promise.then( state => { console.log( state ); return state;} );
-	}
-
 	FSM.prototype.run = function() {
-		this.inputSignal();
+		this.inputSignal(FSM.prototype.runFSMSignal);
 	}
 
 	FSM.prototype.inputSignal = function(sig) {
 		let result;
-
-//		if (!this.promise) {
-//			throw("FSM not initialized. call init() before run().")
-//		}
+		let transition;
 
 		this.promise = this.promise.then( state => {
 			
-			if (sig === undefined)	// use undefined signal for FSM.run() 
-				return sig === undefined && state === this.idle ? this.awaiting : state;
-
-			let transition = state.getTransition(sig.id);
-
+			transition = state.getTransition(sig.id);
+			
 			if ( transition ) {
 				try {
 					this.onLeave && this.onLeave(state);
@@ -112,6 +136,7 @@
 					}
 					catch (error) {
 						result = error;
+						console.log("FSM caught: ", error);
 
 						return transition.failureState || state;
 					}
@@ -119,11 +144,51 @@
 			}
 			return state;		
 		})
-		.then( state => { return tryCallback(this.onSettle, state)(state, result); });
-//		.then( state => { this.onSettle && this.onSettle(state, result); return state; });
+		.then( state => { return transition && 
+									( tryCallback(state.on, state)(state, result) ||
+									tryCallback(this.onSettle, state)(state, result) ); });
+
+//		.then( state => {  this.onSettle(state, result); return state; });
 			
 
 	}
-//})();
-//import * as AP from '/static/FSM.js'      
+//})()
+
+let fsm1 = new FSM();
+let fsm2 = new FSM();
+
+const firstCallback = transitionCallbackResult => { console.log("first settled")}
+const secondCallback = transitionCallbackResult => { console.log("second settled")}
+
+let nextSignal =  { id: 100 };
+
+fsm1.init( {
+	state1: {id: 1, name: "firstState", description: "qq", on: firstCallback},
+	state2: {id: 2, name: "secondState", description: "ww", on: secondCallback}
+	}
+);
+
+
+
+fsm1.awaiting.chain(nextSignal.id, fsm1.state1).chain(nextSignal.id, fsm1.state2).chain(nextSignal.id, fsm1.awaiting);
+
+//fsm1.state1.getTransition(nextSignal.id)
+//fsm1.run();
+
+let st3 = new State(3);
+st3.on = transitionCallbackResult => { console.log("third settled")}
+
+fsm2.init( [{id: 1, name: "firstState", description: "qq", on: firstCallback}, 
+	{id: 2, name: "secondState", description: "qq", on: secondCallback}, st3])
+
+fsm2.awaiting.chain(nextSignal.id, fsm2.firstState).chain(nextSignal.id, fsm2.secondState).chain(nextSignal.id, 
+	st3);
+
+//fsm1.state1.getTransition(nextSignal.id)
+fsm2.run();
+
+fsm2.inputSignal(nextSignal)
+fsm2.inputSignal(nextSignal)
+fsm2.inputSignal(nextSignal)
+fsm2.inputSignal(nextSignal)
 
