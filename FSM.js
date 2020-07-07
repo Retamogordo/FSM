@@ -160,17 +160,56 @@ let fsm2 = new FSM();
 const firstCallback = transitionCallbackResult => { console.log("first settled")}
 const secondCallback = transitionCallbackResult => { console.log("second settled")}
 
-let nextSignal =  { id: 100 };
+let sendRequestSignal =  { id: 100 };
+let timeoutSignal =  { id: 101 };
+let yieldSignal =  { id: 102 };
+let backToListeningSignal = { id: 103 };
+let responseReadySignal = { id: 104 };
 
 fsm1.init( {
-	state1: {id: 1, name: "firstState", description: "qq", on: firstCallback},
-	state2: {id: 2, name: "secondState", description: "ww", on: secondCallback}
-	}
-);
+	requestSent: {id: 1, on: requestSentCallback},
+	responseReady: {id: 2, on: responseReadyCallback},
+	noResponse: {id: 3, on: noResponse}
+	} );
 
+fsm1.awaiting.chain(sendRequestSignal.id, fsm1.requestSent, sendRequestOut)
+	.chain(timeoutSignal.id, fsm1.requestSent)
+	.chain(yieldSignal.id, fsm1.noResponse);
+	.chain(backToListeningSignal.id, fsm1.awaiting);
 
+fsm1.requestSent.chain(responseReadySignal.id, fsm1.responseReady, consumeResponse)
+	.chain(backToListeningSignal.id, fsm1.awaiting);
+	
+const sendRequestOut = (req) => {
+	// sending code here
+	console.log("Sending request...");
+	sendRequestThenReceiveResponseDelayed(2000);
+};
+const consumeResponse = (resp) => {
+	// 
+};
 
-fsm1.awaiting.chain(nextSignal.id, fsm1.state1).chain(nextSignal.id, fsm1.state2).chain(nextSignal.id, fsm1.awaiting);
+setResponseTimeout = function(delay) {
+	setTimeout( 
+		() => { 
+			console.log("Retrying after ", delay, " ms")
+			
+			fsm1.inputSignal(timeoutSignal);
+
+		}, delay );
+}
+
+sendRequestThenReceiveResponseDelayed = function(delay) {
+	setTimeout( 
+		() => { 
+			console.log("Received response after ", delay, " ms")
+			
+			fsm1.inputSignal(responseReadySignal);
+
+		}, delay );
+}
+
+fsm1.run();
 
 //fsm1.state1.getTransition(nextSignal.id)
 //fsm1.run();
