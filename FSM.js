@@ -47,7 +47,7 @@
 
 	Signal = function(id, transitionsCallbackArgs) {
 		this.id = id;
-		this.callbackArgs = transitionsCallbackArgs;
+		this.payload = transitionsCallbackArgs;
 	}
 
 	FSM = function() {
@@ -134,7 +134,7 @@
 						transition.delay &&	await waitPromise(transition.delay);
 
 //						console.log("after transition.delay")
-						result = transition.callback && transition.callback(sig.callbackArgs);
+						result = (transition.callback && transition.callback(sig.payload)) || sig.payload;
 //						console.log("transition.nextState==", transition.nextState)
 
 						return transition.nextState;
@@ -176,13 +176,13 @@ ShiftRegisterFSM.resetSignalID = 101;
 
 ShiftRegisterFSM.prototype.init = function () {
 	let state = this.awaiting;
-	let firstState;
+//	let firstState;
 	let id = 1;
 	let newState;
 	let length = this.length;
 	let transition;
 
-	this.awaiting.on = () => { this.onReset && this.onReset(); }
+//	this.awaiting.on = () => { this.onReset && this.onReset(); }
 
 	let states = [];
 	while (length--) {
@@ -192,9 +192,9 @@ ShiftRegisterFSM.prototype.init = function () {
 		transition.delay = this.transitionDelay;
 		transition.callback = this.transitionCallback;
 
-		firstState = firstState || newState;
+//		firstState = firstState || newState;
 		
-		newState.chain( ShiftRegisterFSM.resetSignalID, this.awaiting); // reset
+//		newState.chain( ShiftRegisterFSM.resetSignalID, this.awaiting); // reset
 
 		state = newState;
 		
@@ -203,25 +203,33 @@ ShiftRegisterFSM.prototype.init = function () {
 		states.push(state);
 	}
 
-	if (firstState && this.loopBack) {
-		state.chain( ShiftRegisterFSM.shiftSignalID, firstState);
+//	if (firstState && this.loopBack) {
+	if (this.loopBack) {
+//		state.chain( ShiftRegisterFSM.shiftSignalID, firstState);
+		state.chain( ShiftRegisterFSM.shiftSignalID, this.awaiting);
 		transition = state.getTransition(ShiftRegisterFSM.shiftSignalID)
 		transition.delay = this.transitionDelay;
 		transition.callback = this.transitionCallback;
 
-		state.chain( ShiftRegisterFSM.resetSignalID, shiftRegFSM.awaiting);
+//		state.chain( ShiftRegisterFSM.resetSignalID, shiftRegFSM.awaiting);
+	} 
+	else {
+		state.chain( ShiftRegisterFSM.shiftSignalID, state);
+		state.on = () => { this.onLastSettle && this.onLastSettle(); }
 	}
 
 	FSM.prototype.init.call(this, states);
 }
 
 ShiftRegisterFSM.prototype.shift = function(transitionCallbackArgs) {
-	this.inputSignal({id: ShiftRegisterFSM.shiftSignalID, callbackArgs: transitionCallbackArgs})
+	this.inputSignal({id: ShiftRegisterFSM.shiftSignalID, payload: transitionCallbackArgs})
 }
 
-ShiftRegisterFSM.prototype.reset = function(transitionCallbackArgs) {
-	this.inputSignal({id: ShiftRegisterFSM.resetSignalID, callbackArgs: transitionCallbackArgs})
-}
+//ShiftRegisterFSM.prototype.reset = function(transitionCallbackArgs) {
+//	this.inputSignal({id: ShiftRegisterFSM.resetSignalID, payload: transitionCallbackArgs})
+//}
+
+
 
 prepareRequest = token => { 
 	let req = {token, description: "My request"}
@@ -229,24 +237,40 @@ prepareRequest = token => {
 	return req;
 }
 
+const requestReadyToSendCallback = (state, req) => {
+	console.log("Request ready to send settled, request.token: ", req.token.id);
+
+	shiftRegFSM.run();
+	shiftRegFSM.shift(req.token);
+//	shiftRegFSM.shift(currToken);
+	
+	fsm1.inputSignal({id: 100, payload: req});
+}
+
 const requestSentCallback = (state, req) => { 
 try {
 	console.log("Request sent settled, request.token: ", req.token.id);
-	currReq = req;
+	currToken = req.token;
 
-	sendRequestThenReceiveResponseDelayed(req, 2400);
+	fsm1.inputSignal({id: 102, payload: req.token});
+
 }catch (err) { console.log(err)}
+}
 
-}//const shiftCallback = transitionCallbackResult => { console.log("Shift to", this.name)}
+const waitingForRequestCallback = (state, token) => {
+	console.log("Waiting for response ready settled, token: ", token.id);
+
+	sendRequestThenReceiveResponseDelayed(token, 2400);
+}
 
 const responseReadyCallback = (state, response) => { 
 	console.log("Response ready settled");
 
 	try {
-	if (validateResponse(response, currReq)) {
-		console.log("Response valid !!!, stopping shift reg")
+	if (validateResponse(response, currToken)) {
+		console.log("Response valid !!!, token: ", response.token.id)
 
-		shiftRegFSM.reset();
+//		shiftRegFSM.reset();
 
 		fsm1.inputSignal(backToListeningSignal);
 
@@ -261,43 +285,54 @@ const responseReadyCallback = (state, response) => {
 	} catch(err) {console.log(err)}
 }
 
+const backToListeningCallback = () => {
+	console.log("Back to listening settled, stopping shift reg.");
+
+//	shiftRegFSM.reset();
+	shiftRegFSM.stop();
+}
+
 const consumeResponse = response => {} 
-const validateResponse = (response, request) => { 
-	return response.token.id === request.token.id; 
+const validateResponse = (response, token) => { 
+	return response.token.id === token.id; 
 } 
 
-//let fsm2 = new FSM();
+const genNextToken = token => {return token ? {id: token.id + 1} : {id: 1} }; 
 
-let maxShifts = 5;
-currShift = 0;
-currReq = undefined;
+//let maxShifts = 5;
+//currShift = 0;
+//currToken = undefined;
 
-const shiftRegTransition = token => token;
+let shiftRegFSM = new ShiftRegisterFSM(3, 1000, genNextToken);
+shiftRegFSM.onIdle = () => { console.log("shift reg stopped"); }
 
-const pipeRequest = req => req;
-const pipeResponse = response => response;
+//shiftRegFSM.onReset = () => { console.log("Shift reg. reset")}
+shiftRegFSM.onLastSettle = () => {
+	console.log("Last stage settled");
 
-let shiftRegFSM = new ShiftRegisterFSM(maxShifts, 1000, shiftRegTransition);
+	//	fsm1.inputSignal(sig);
+	fsm1.inputSignal( { id: 103, name: "Giving up => Back To  Waiting for Command" } );
+}
 
-const genNextToken = token => {return {id: token.id + 1}}; 
-
-
-shiftRegFSM.onReset = () => { console.log("Shift reg. reset")}
 shiftRegFSM.onSettle = (state, token) => {
 	console.log("Shift, token: ", token.id, "state:", state.name);
 
 	let sig;
 try {
-	if( ++currShift < maxShifts ) {
+//	if( ++currShift < maxShifts ) {
 		sig =  { id: 101, name: "Response Timeout"};
 	
-		token = genNextToken(token);		
 		shiftRegFSM.shift(token);
-	}
-	else {
-		sig = { id: 103, name: "Back To  Waiting for Command" }
-	}
-	sig.callbackArgs = prepareRequest(token);
+		
+		sig.payload = prepareRequest(token);
+//		fsm1.inputSignal(sig);
+//	}
+//	else {
+//		shiftRegFSM.reset();
+
+//		sig = { id: 103, name: "Giving up => Back To  Waiting for Command" }
+//	}
+//	sig.payload = prepareRequest(token);
 	fsm1.inputSignal(sig);
 
 	console.log("Shift, new token: ", token.id, " passing " + sig.name + " command");
@@ -307,9 +342,10 @@ try {
 
 shiftRegFSM.init();
 
+let makeRequestSignal =  { id: 99, name: "Make Request" };
 let sendRequestSignal =  { id: 100, name: "Send Request" };
 let timeoutSignal =  { id: 101, name: "Response Timeout" };
-//let yieldSignal =  { id: 102 };
+let waitForRequestSignal =  { id: 102, name: "Waiting for Request" };
 let backToListeningSignal = { id: 103, name: "Back To  Waiting for Command" };
 let responseReadySignal = { id: 104, name: "Response Ready" };
 let dropResponseSignal = { id: 105, name: "Drop Late Response" };
@@ -317,21 +353,25 @@ let dropResponseSignal = { id: 105, name: "Drop Late Response" };
 let fsm1 = new FSM();
 
 fsm1.init( {
-	requestSent: {id: 1, on: requestSentCallback},
-	responseReady: {id: 2, on: responseReadyCallback},
-//	noResponse: {id: 3, on: noResponseCallback}
+	requestReadyToSend: {id: 1, on: requestReadyToSendCallback},
+	requestSent: {id: 2, on: requestSentCallback},
+	waitingForRequest: {id: 3, on: waitingForRequestCallback},
+	responseReady: {id: 4, on: responseReadyCallback},
 	} );
 
-//fsm1.awaiting.chain(sendRequestSignal.id, fsm1.requestSent, sendRequestOut)
-fsm1.awaiting.chain(sendRequestSignal.id, fsm1.requestSent, pipeRequest)
-	.chain(timeoutSignal.id, fsm1.requestSent, pipeRequest)
-//	.chain(yieldSignal.id, fsm1.noResponse)
-	.chain(backToListeningSignal.id, fsm1.awaiting);
+fsm1.awaiting.on = backToListeningCallback;
 
-//fsm1.requestSent.chain(responseReadySignal.id, fsm1.responseReady, validateResponse).
-fsm1.requestSent.chain(responseReadySignal.id, fsm1.responseReady, pipeResponse)
-	.chain(dropResponseSignal.id, fsm1.requestSent)
-	.chain(backToListeningSignal.id, fsm1.awaiting);
+fsm1.awaiting.chain(makeRequestSignal.id, fsm1.requestReadyToSend)
+	.chain(sendRequestSignal.id, fsm1.requestSent)
+	.chain(waitForRequestSignal.id, fsm1.waitingForRequest)
+	.chain(timeoutSignal.id, fsm1.requestSent)	
+
+fsm1.waitingForRequest.chain(backToListeningSignal.id, fsm1.awaiting);
+
+fsm1.waitingForRequest.chain(responseReadySignal.id, fsm1.responseReady)
+	.chain(dropResponseSignal.id, fsm1.waitingForRequest);
+
+fsm1.responseReady.chain(backToListeningSignal.id, fsm1.awaiting);
 
 //fsm1.onSettle = (state, result) => { 
 //	console.log("fsm1.onSettle ", state)
@@ -339,25 +379,14 @@ fsm1.requestSent.chain(responseReadySignal.id, fsm1.responseReady, pipeResponse)
 
 fsm1.run();
 
-let currToken = {id: 1};
+currToken = genNextToken();
 
 let req = prepareRequest(currToken);
- sendRequestSignal.callbackArgs = req;
+ makeRequestSignal.payload = req;
 
-fsm1.inputSignal(sendRequestSignal);
-shiftRegFSM.run();
-shiftRegFSM.shift(currToken);
+fsm1.inputSignal(makeRequestSignal);
 
-/*
-const sendRequestOut = (req) => {
-	// sending code here
-	console.log("Sending request...");
-	sendRequestThenReceiveResponseDelayed(2000);
-};
-const validateResponse = (resp) => {
-	// 
-};
-*/
+
 setResponseTimeout = function(delay) {
 	setTimeout( 
 		() => { 
@@ -370,12 +399,12 @@ setResponseTimeout = function(delay) {
 
 const simulateResponse = token => { return { token, responseDescr: "qwertz"} }
 
-sendRequestThenReceiveResponseDelayed = function(req, delay) {
+sendRequestThenReceiveResponseDelayed = function(token, delay) {
 	setTimeout( 
 		() => { 
-			console.log("Received response after ", delay, " ms, req.token: ", req.token)
+			console.log("Received response after ", delay, " ms, token: ", token.id)
 			
-			responseReadySignal.callbackArgs = simulateResponse(req.token);
+			responseReadySignal.payload = simulateResponse(token);
 			fsm1.inputSignal(responseReadySignal);
 
 		}, delay );
