@@ -192,10 +192,6 @@ ShiftRegisterFSM.prototype.init = function () {
 		transition.delay = this.transitionDelay;
 		transition.callback = this.transitionCallback;
 
-//		firstState = firstState || newState;
-		
-//		newState.chain( ShiftRegisterFSM.resetSignalID, this.awaiting); // reset
-
 		state = newState;
 		
 		++id;
@@ -203,15 +199,11 @@ ShiftRegisterFSM.prototype.init = function () {
 		states.push(state);
 	}
 
-//	if (firstState && this.loopBack) {
 	if (this.loopBack) {
-//		state.chain( ShiftRegisterFSM.shiftSignalID, firstState);
 		state.chain( ShiftRegisterFSM.shiftSignalID, this.awaiting);
 		transition = state.getTransition(ShiftRegisterFSM.shiftSignalID)
 		transition.delay = this.transitionDelay;
 		transition.callback = this.transitionCallback;
-
-//		state.chain( ShiftRegisterFSM.resetSignalID, shiftRegFSM.awaiting);
 	} 
 	else {
 		state.chain( ShiftRegisterFSM.shiftSignalID, state);
@@ -229,183 +221,168 @@ ShiftRegisterFSM.prototype.shift = function(transitionCallbackArgs) {
 //	this.inputSignal({id: ShiftRegisterFSM.resetSignalID, payload: transitionCallbackArgs})
 //}
 
+function RequestResponseTimeoutPatternFSM(request, retrials, retrialDelay) {
+	FSM.call(this);
 
+//	this.retrials = retrials;
+	this.genNextToken = token => {return token ? {id: token.id + 1} : {id: 1} }; 
 
-prepareRequest = token => { 
-	let req = {token, description: "My request"}
-
-	return req;
+	this.userRequest = request;
+	this.retryRegister = new ShiftRegisterFSM(retrials, retrialDelay, this.genNextToken);
 }
 
-const requestReadyToSendCallback = (state, req) => {
-	console.log("Request ready to send settled, request.token: ", req.token.id);
+RequestResponseTimeoutPatternFSM.prototype = Object.create(FSM.prototype);
+RequestResponseTimeoutPatternFSM.prototype.constructor = RequestResponseTimeoutPatternFSM;
 
-	shiftRegFSM.run();
-	shiftRegFSM.shift(req.token);
-//	shiftRegFSM.shift(currToken);
-	
-	fsm1.inputSignal({id: 100, payload: req});
-}
+RequestResponseTimeoutPatternFSM.makeRequestSignalId = 99;
+RequestResponseTimeoutPatternFSM.sendRequestSignalId = 100;
+RequestResponseTimeoutPatternFSM.timeoutSignalId = 101;
+RequestResponseTimeoutPatternFSM.waitForRequestSignalId = 102;
+RequestResponseTimeoutPatternFSM.backToListeningSignalId = 103;
+RequestResponseTimeoutPatternFSM.responseReadySignalId = 104;
+RequestResponseTimeoutPatternFSM.dropResponseSignalId = 105;
 
-const requestSentCallback = (state, req) => { 
-try {
-	console.log("Request sent settled, request.token: ", req.token.id);
-	currToken = req.token;
+RequestResponseTimeoutPatternFSM.prototype.init = function() {
 
-	fsm1.inputSignal({id: 102, payload: req.token});
-
-}catch (err) { console.log(err)}
-}
-
-const waitingForRequestCallback = (state, token) => {
-	console.log("Waiting for response ready settled, token: ", token.id);
-
-	sendRequestThenReceiveResponseDelayed(token, 2400);
-}
-
-const responseReadyCallback = (state, response) => { 
-	console.log("Response ready settled");
-
-	try {
-	if (validateResponse(response, currToken)) {
-		console.log("Response valid !!!, token: ", response.token.id)
-
-//		shiftRegFSM.reset();
-
-		fsm1.inputSignal(backToListeningSignal);
-
-		consumeResponse(response);
+	const consumeResponse = response => {} 
+	const validateResponse = (response, token) => { 
+		return response.token.id === token.id; 
 	}
-	else {
-		console.log("Response timed out, keep trying")
 
-		fsm1.inputSignal(dropResponseSignal);
-		console.log("after drop")
-	}
-	} catch(err) {console.log(err)}
-}
+	const requestReadyToSendCallback = (state, req) => {
+		console.log("Request ready to send settled, request.token: ", req.token.id);
 
-const backToListeningCallback = () => {
-	console.log("Back to listening settled, stopping shift reg.");
-
-//	shiftRegFSM.reset();
-	shiftRegFSM.stop();
-}
-
-const consumeResponse = response => {} 
-const validateResponse = (response, token) => { 
-	return response.token.id === token.id; 
-} 
-
-const genNextToken = token => {return token ? {id: token.id + 1} : {id: 1} }; 
-
-//let maxShifts = 5;
-//currShift = 0;
-//currToken = undefined;
-
-let shiftRegFSM = new ShiftRegisterFSM(3, 1000, genNextToken);
-shiftRegFSM.onIdle = () => { console.log("shift reg stopped"); }
-
-//shiftRegFSM.onReset = () => { console.log("Shift reg. reset")}
-shiftRegFSM.onLastSettle = () => {
-	console.log("Last stage settled");
-
-	//	fsm1.inputSignal(sig);
-	fsm1.inputSignal( { id: 103, name: "Giving up => Back To  Waiting for Command" } );
-}
-
-shiftRegFSM.onSettle = (state, token) => {
-	console.log("Shift, token: ", token.id, "state:", state.name);
-
-	let sig;
-try {
-//	if( ++currShift < maxShifts ) {
-		sig =  { id: 101, name: "Response Timeout"};
-	
-		shiftRegFSM.shift(token);
+		this.retryRegister.run();
+		this.retryRegister.shift(req.token);
+	//	shiftRegFSM.shift(currToken);
 		
-		sig.payload = prepareRequest(token);
-//		fsm1.inputSignal(sig);
-//	}
-//	else {
-//		shiftRegFSM.reset();
+		this.inputSignal({id: 100, payload: req});
+	}
 
-//		sig = { id: 103, name: "Giving up => Back To  Waiting for Command" }
-//	}
-//	sig.payload = prepareRequest(token);
-	fsm1.inputSignal(sig);
+	const requestSentCallback = (state, req) => { 
+	try {
+		console.log("Request sent settled, request.token: ", req.token.id);
+		this.currToken = req.token;
 
-	console.log("Shift, new token: ", token.id, " passing " + sig.name + " command");
-}catch(err) {console.log(err)}
-//	currToken = getNextToken(token);
+		this.inputSignal({id: 102, payload: req.token});
+
+	}catch (err) { console.log(err)}
+	}
+
+	const waitingForResponseCallback = (state, token) => {
+		console.log("Waiting for response ready settled, token: ", token.id);
+
+		sendRequestThenReceiveResponseDelayed(token, 2400);
+	}
+
+	const responseReadyCallback = (state, response) => { 
+		console.log("Response ready settled");
+
+		try {
+		if (validateResponse(response, this.currToken)) {
+			console.log("Response valid !!!, token: ", response.token.id)
+
+			this.inputSignal(backToListeningSignal);
+
+			consumeResponse(response);
+		}
+		else {
+			console.log("Response timed out, keep trying")
+
+			this.inputSignal(dropResponseSignal);
+			console.log("after drop")
+		}
+		} catch(err) {console.log(err)}
+	}
+
+	const backToListeningCallback = () => {
+		console.log("Back to listening settled, stopping shift reg.");
+
+	//	shiftRegFSM.reset();
+		this.retryRegister.stop();
+	}
+
+	const simulateResponse = token => { return { token, responseDescr: "qwertz"} }
+
+	const sendRequestThenReceiveResponseDelayed = (token, delay) => {
+		setTimeout( 
+			() => { 
+				console.log("Received response after ", delay, " ms, token: ", token.id)
+				
+				let sig = {id: RequestResponseTimeoutPatternFSM.responseReadySignalId}
+				sig.payload = simulateResponse(token);
+				this.inputSignal(sig);
+
+			}, delay );
+	}
+
+	this.retryRegister.onIdle = () => { console.log("shift reg stopped"); }
+
+	//shiftRegFSM.onReset = () => { console.log("Shift reg. reset")}
+	this.retryRegister.onLastSettle = () => {
+		console.log("Last stage settled");
+
+		//	fsm1.inputSignal(sig);
+		this.inputSignal( { id: 103, name: "Giving up => Back To  Waiting for Command" } );
+	}
+
+	this.retryRegister.onSettle = (state, token) => {
+		console.log("Shift, token: ", token.id, "state:", state.name);
+
+		let sig;
+	try {
+		sig =  { id: 101, name: "Response Timeout"};
+		
+		this.retryRegister.shift(token);
+			
+		sig.payload = {token, userRequest: this.userRequest};
+
+		this.retryRegister.inputSignal(sig);
+
+		console.log("Shift, new token: ", token.id, " passing " + sig.name + " command");
+	}catch(err) {console.log(err)}
+	//	currToken = getNextToken(token);
+	}
+
+	FSM.prototype.init.call(this, 
+		{	requestReadyToSend: {id: 1, on: requestReadyToSendCallback},
+			requestSent: {id: 2, on: requestSentCallback},
+			waitingForRequest: {id: 3, on: waitingForResponseCallback},
+			responseReady: {id: 4, on: responseReadyCallback},
+		} );
+
+	this.awaiting.on = backToListeningCallback;
+
+	this.awaiting.chain(RequestResponseTimeoutPatternFSM.makeRequestSignalId, this.requestReadyToSend)
+		.chain(RequestResponseTimeoutPatternFSM.sendRequestSignalId, this.requestSent)
+		.chain(RequestResponseTimeoutPatternFSM.waitForRequestSignalId, this.waitingForRequest)
+		.chain(RequestResponseTimeoutPatternFSM.timeoutSignalId, this.requestSent)	
+
+	this.waitingForRequest.chain(RequestResponseTimeoutPatternFSM.backToListeningSignalId, this.awaiting);
+
+	this.waitingForRequest.chain(RequestResponseTimeoutPatternFSM.responseReadySignalId, this.responseReady)
+		.chain(RequestResponseTimeoutPatternFSM.dropResponseSignalId, this.waitingForRequest);
+
+	this.responseReady.chain(RequestResponseTimeoutPatternFSM.backToListeningSignalId, this.awaiting);
+
+	this.retryRegister.init();
 }
 
-shiftRegFSM.init();
+RequestResponseTimeoutPatternFSM.prototype.send = function() {
 
-let makeRequestSignal =  { id: 99, name: "Make Request" };
-let sendRequestSignal =  { id: 100, name: "Send Request" };
-let timeoutSignal =  { id: 101, name: "Response Timeout" };
-let waitForRequestSignal =  { id: 102, name: "Waiting for Request" };
-let backToListeningSignal = { id: 103, name: "Back To  Waiting for Command" };
-let responseReadySignal = { id: 104, name: "Response Ready" };
-let dropResponseSignal = { id: 105, name: "Drop Late Response" };
+	this.currToken = this.genNextToken();
 
-let fsm1 = new FSM();
+//	let req = prepareRequest(currToken);
+	let sig = {id: RequestResponseTimeoutPatternFSM.makeRequestSignalId}
+	sig.payload = {token: this.currToken, userRequest: this.request};
 
-fsm1.init( {
-	requestReadyToSend: {id: 1, on: requestReadyToSendCallback},
-	requestSent: {id: 2, on: requestSentCallback},
-	waitingForRequest: {id: 3, on: waitingForRequestCallback},
-	responseReady: {id: 4, on: responseReadyCallback},
-	} );
+	this.inputSignal(sig);
+}
 
-fsm1.awaiting.on = backToListeningCallback;
+let fsm1 = new RequestResponseTimeoutPatternFSM({"My request"}, 4, 500);
 
-fsm1.awaiting.chain(makeRequestSignal.id, fsm1.requestReadyToSend)
-	.chain(sendRequestSignal.id, fsm1.requestSent)
-	.chain(waitForRequestSignal.id, fsm1.waitingForRequest)
-	.chain(timeoutSignal.id, fsm1.requestSent)	
 
-fsm1.waitingForRequest.chain(backToListeningSignal.id, fsm1.awaiting);
-
-fsm1.waitingForRequest.chain(responseReadySignal.id, fsm1.responseReady)
-	.chain(dropResponseSignal.id, fsm1.waitingForRequest);
-
-fsm1.responseReady.chain(backToListeningSignal.id, fsm1.awaiting);
-
-//fsm1.onSettle = (state, result) => { 
-//	console.log("fsm1.onSettle ", state)
-//}
-
+fsm1.init();
 fsm1.run();
 
-currToken = genNextToken();
-
-let req = prepareRequest(currToken);
- makeRequestSignal.payload = req;
-
-fsm1.inputSignal(makeRequestSignal);
-
-
-setResponseTimeout = function(delay) {
-	setTimeout( 
-		() => { 
-			console.log("Retrying after ", delay, " ms")
-			
-			fsm1.inputSignal(timeoutSignal);
-
-		}, delay );
-}
-
-const simulateResponse = token => { return { token, responseDescr: "qwertz"} }
-
-sendRequestThenReceiveResponseDelayed = function(token, delay) {
-	setTimeout( 
-		() => { 
-			console.log("Received response after ", delay, " ms, token: ", token.id)
-			
-			responseReadySignal.payload = simulateResponse(token);
-			fsm1.inputSignal(responseReadySignal);
-
-		}, delay );
-}
+fsm1.send();
