@@ -1,7 +1,8 @@
-//(function () {
+
 	waitPromise = function(interval) { 
 		return new Promise( (resolve, _) => {
-					 setTimeout( () => { resolve( interval ); }, interval );
+					 setTimeout( () => { 
+					 	resolve( interval ); }, interval );
 					} );
 	}
 
@@ -33,10 +34,7 @@
 	};
 
 	State.prototype.getTransition = function(sig) {
-	try {
 		return this.transitionMap.get(sig);
-			}
-	catch(err) {console.log(err)}
 	}
 
 	State.prototype.chain = function(signalId, toState, transitionCallback, failureState) {
@@ -44,29 +42,27 @@
 		return toState;
 	}
 
-
 	Signal = function(id, transitionsCallbackArgs) {
 		this.id = id;
 		this.payload = transitionsCallbackArgs;
 	}
 
 	FSM = function() {
-		console.log("FSM")
 		this.idle = new State(-1, "Idle");
 		this.awaiting = new State(0, "Running, awaiting signals");
 
-		this.idle.chain(FSM.prototype.runFSMSignal.id, this.awaiting);
+		this.idle.chain(FSM.runFSMSignal.id, this.awaiting);
 	
 		this.states = new Map();
 		this.states.set(this.idle.id, this.idle);
 		this.states.set(this.awaiting.id, this.awaiting);
 
-		this.promise = new Promise((resolve, reject) => {
-							resolve(this.idle);
-						});
+		this.currState = this.idle;
 	}
 
-	FSM.prototype.runFSMSignal = {id: -1};
+	FSM.runFSMSignal = {id: -1};
+
+	FSM.prototype.onSettle;
 
 	FSM.prototype.init = function( objStates ) {
 		let state;
@@ -102,77 +98,122 @@
 	}
 
 	FSM.prototype.stop  = function() {
-		this.promise = this.promise.then( (_) => { 
-			return tryCallback(this.onIdle, this.idle)(this.idle, "FSM stopped");
-		})
-	}
+		this.currState = this.idle;
 
+		tryCallback(this.onIdle, this.idle)(this.idle, "FSM stopped");
+	}
+	
 	FSM.prototype.run = function() {
-		this.inputSignal(FSM.prototype.runFSMSignal);
+		this.inputSignal(FSM.runFSMSignal);
 	}
 
 	FSM.prototype.inputSignal = function(sig) {
+
+		this.currState = this.changeState(sig, this.currState);
+	}
+
+
+	FSM.prototype.changeState = function(sig, state) {
 		let result;
-		let transition;
+		let transition = state.getTransition(sig.id);
 
-//		console.log("signal:", sig)
-
-		this.promise = this.promise.then( async state => {
-			
-//			console.log("state: ", state)
-			transition = state.getTransition(sig.id);
-
-//			console.log("transition: ", transition)
-			
-			if ( transition ) {
-				try {
-					this.onLeave && this.onLeave(state);
-				}
-				// do not consume callback exceptions
-				finally	{
-					try	{	
-						transition.delay &&	await waitPromise(transition.delay);
-
-//						console.log("after transition.delay")
-						result = (transition.callback && transition.callback(sig.payload)) || sig.payload;
-//						console.log("transition.nextState==", transition.nextState)
-
-						return transition.nextState;
-					}
-					catch (error) {
-						result = error;
-						console.log("FSM caught: ", error);
-
-						return transition.failureState || state;
-					}
-				}
+		if ( transition ) {
+			try {
+				this.onLeave && this.onLeave(state);
 			}
-			return state;		
-		})
-		.then( state => { 
-//			console.log("IN FSM ", state)
-			 transition && 
-						( (state.on && tryCallback(state.on, state)(state, result)) ||
-						 (this.onSettle && tryCallback(this.onSettle, state)(state, result)) ); 
+			// do not consume callback exceptions
+			finally	{
+				try	{	
+					result = (transition.callback && transition.callback(sig.payload)) || sig.payload;
+	//				console.log("result = ", result, "sig.payload: ", sig.payload)
+					state = transition.nextState;
+				}
+				catch (error) {
+					result = error;
+					console.log("FSM caught: ", error);
+
+					return transition.failureState || state;
+				}
+				(state.on && tryCallback(state.on, state)(state, result)) ||
+			 	(this.onSettle && tryCallback(this.onSettle, state)(state, result)); 
+			}
+		}
+		return state;		
+	}
+
+	AsyncFSM = function() {
+		FSM.call(this);
+		
+		this.promise = new Promise((resolve, _) => {
+							resolve(this.idle);
+						});
+	}
+	AsyncFSM.prototype = Object.create(FSM.prototype);
+	AsyncFSM.prototype.constructor = AsyncFSM;
+
+	AsyncFSM.prototype.stop  = function() {
+		this.promise = new Promise((resolve, _) => {
+							tryCallback(this.onIdle, this.idle)(this.idle, "FSM stopped");
+							
+							resolve(this.idle);
+						});
+	}
+
+	AsyncFSM.prototype.inputSignal = function(sig) {
+		this.promise = this.promise.then( state => {return this.changeState(sig, state)} );
+	}
+
+	AsyncFSM.prototype.inputSignalDelayed = function(sig, delay) {
+		this.promise = this.promise.then( async state => {
+			await waitPromise(delay); 
+				
 			return state;
-		});
-//		.then( state => {  this.onSettle(state, result); return state; });		
+		})
+		.then( state => {return this.changeState(sig, state)} );
 	}
 //})()
-function ShiftRegisterFSM(length, transitionDelay, transitionCallback, loopBack) {
-	console.log("in ShiftRegisterFSM")
-	FSM.call(this);
+/*
+function InternalDataGeneratorFSM(dataGenerationCallback) {
+	AsyncFSM.call(this);
 
+//	this.idle.getTransition().transitionCallback
+	this.dataGenerationCallback = dataGenerationCallback;
+
+	this.transitionDataFlowGenerator = (f, initialInternalValue) => {
+		let data = initialInternalValue;
+
+		console.log("data ", data )
+		return (...args) => {
+			data = f(data, ...args);
+			return data;
+		}
+	}
+
+	this.transitionCallback = this.transitionDataFlowGenerator(dataGenerationCallback);
+}
+
+InternalDataGeneratorFSM.prototype = Object.create(AsyncFSM.prototype);
+InternalDataGeneratorFSM.prototype.constructor = InternalDataGeneratorFSM;
+
+InternalDataGeneratorFSM.prototype.run = function(initialInternalValue) {
+	this.transitionDataFlowGenerator(undefined, initialInternalValue);	
+
+	AsyncFSM.prototype.run.call(this);
+}
+*/
+function ShiftRegisterFSM(length, transitionCallback, loopBack) {
+	AsyncFSM.call(this);
+	
 	this.length = length;
-	this.transitionDelay = transitionDelay;
+//	this.transitionDelay = transitionDelay;
 	this.transitionCallback = transitionCallback;
 	this.loopBack = loopBack;
 }
 
-ShiftRegisterFSM.prototype = Object.create(FSM.prototype);
+ShiftRegisterFSM.prototype = Object.create(AsyncFSM.prototype);
 ShiftRegisterFSM.prototype.constructor = ShiftRegisterFSM;
 ShiftRegisterFSM.shiftSignalID = 100;
-ShiftRegisterFSM.resetSignalID = 101;
+//ShiftRegisterFSM.resetSignalID = 101;
 
 ShiftRegisterFSM.prototype.init = function () {
 	let state = this.awaiting;
@@ -189,7 +230,7 @@ ShiftRegisterFSM.prototype.init = function () {
 		newState = state.chain( ShiftRegisterFSM.shiftSignalID, State.from({ id, name: "shiftState" + id}));
 		
 		transition = state.getTransition(ShiftRegisterFSM.shiftSignalID);
-		transition.delay = this.transitionDelay;
+//		transition.delay = this.transitionDelay;
 		transition.callback = this.transitionCallback;
 
 		state = newState;
@@ -202,7 +243,7 @@ ShiftRegisterFSM.prototype.init = function () {
 	if (this.loopBack) {
 		state.chain( ShiftRegisterFSM.shiftSignalID, this.awaiting);
 		transition = state.getTransition(ShiftRegisterFSM.shiftSignalID)
-		transition.delay = this.transitionDelay;
+//		transition.delay = this.transitionDelay;
 		transition.callback = this.transitionCallback;
 	} 
 	else {
@@ -213,56 +254,78 @@ ShiftRegisterFSM.prototype.init = function () {
 	FSM.prototype.init.call(this, states);
 }
 
-ShiftRegisterFSM.prototype.shift = function(transitionCallbackArgs) {
-	this.inputSignal({id: ShiftRegisterFSM.shiftSignalID, payload: transitionCallbackArgs})
+ShiftRegisterFSM.prototype.shift = function(transitionCallbackArgs, delay) {
+//	console.log("in shift, ", transitionCallbackArgs.id)
+
+	let sig = {id: ShiftRegisterFSM.shiftSignalID, payload: transitionCallbackArgs};
+	
+//	console.log("shift signal payload ", sig.payload)
+	delay ? this.inputSignalDelayed(sig, delay) : this.inputSignal(sig);
+//	this.inputSignal({id: ShiftRegisterFSM.shiftSignalID})
 }
 
-//ShiftRegisterFSM.prototype.reset = function(transitionCallbackArgs) {
-//	this.inputSignal({id: ShiftRegisterFSM.resetSignalID, payload: transitionCallbackArgs})
-//}
+function RequestResponseTimeoutPatternFSM(retrials, retrialDelay) {
+	AsyncFSM.call(this);
 
-function TimeStampGenShiftRegisterFSM(length, transitionDelay) {
-	function genNextTimestamp() {
-		let timestamp; 
-		return () => {
-			console.log("TIME STAMP: ", timestamp);
-			let stamp = new Date().getTime();
-			timestamp = timestamp ? {id: timestamp.id + 1, stamp} : {id: 1, stamp};
-			return timestamp;
-		}
-	}
-
-	const n = genNextTimestamp();
-
-	ShiftRegisterFSM.call(this, length, transitionDelay, n);
-}
-
-TimeStampGenShiftRegisterFSM.prototype = Object.create(ShiftRegisterFSM.prototype);
-TimeStampGenShiftRegisterFSM.prototype.constructor = TimeStampGenShiftRegisterFSM;
-
-function RequestResponseTimeoutPatternFSM() {
-	FSM.call(this);
+	this.retrialDelay = retrialDelay;
 
 //	this.retrials = retrials;
 
-	this.genNextTimestamp = timestamp => {
-		let stamp = new Date().getTime();
-		return timestamp ? {id: timestamp.id + 1, stamp} : {id: 1, stamp};
-	};
+
+	this.retryRegister = new ShiftRegisterFSM(retrials, this.genNextRequestTimestamp);
+
+	this.retryRegister.onIdle = () => { console.log("shift reg idle"); }
+
+	this.retryRegister.awaiting.on = () => { console.log("shift reg RJNNING"); }
+
+	this.retryRegister.onLastSettle = () => {
+		console.log("Last stage settled");
+
+		//	fsm1.inputSignal(sig);
+		this.inputSignal( { id: RequestResponseTimeoutPatternFSM.backToListeningSignalId,
+		 name: "Giving up => Back To  Waiting for Command" } );
+	}
+
+	this.retryRegister.onSettle = (state, timestamp) => {
+		console.log("Shift, timestamp: ", timestamp.id, "state:", state.name);
+
+		this.retryRegister.shift(timestamp, this.retrialDelay);
+//		this.currTimestamp = timestamp;	
+//		console.log(this.currTimestamp)
+
+		this.inputSignal({ id: RequestResponseTimeoutPatternFSM.timeoutSignalId,
+				payload: timestamp, name: "Response Timeout"});
+	}
 }
 
-RequestResponseTimeoutPatternFSM.prototype = Object.create(FSM.prototype);
+
+RequestResponseTimeoutPatternFSM.prototype = Object.create(AsyncFSM.prototype);
 RequestResponseTimeoutPatternFSM.prototype.constructor = RequestResponseTimeoutPatternFSM;
 
-RequestResponseTimeoutPatternFSM.prototype.onRequestSent;
+RequestResponseTimeoutPatternFSM.prototype.onSendRequest;
 //RequestResponseTimeoutPatternFSM.prototype.onRetry;
 RequestResponseTimeoutPatternFSM.prototype.onResponseReady;
 RequestResponseTimeoutPatternFSM.prototype.onResponseFailure;
 
-RequestResponseTimeoutPatternFSM.makeRequestSignalId = 99;
+RequestResponseTimeoutPatternFSM.prototype.genNextRequestTimestamp = function(timestamp) {
+		let stamp = new Date().getTime();
+//		console.log("genNextRequestTimestamp: ", timestampedRequest)
+		return timestamp ? {id: timestamp.id + 1, stamp} : {id: 1, stamp};
+};
+
+/*RequestResponseTimeoutPatternFSM.prototype.genNextRequestTimestamp = function(timestampedRequest) {
+		let stamp = new Date().getTime();
+		console.log("genNextRequestTimestamp: ", timestampedRequest)
+		timestampedRequest.timestamp = 
+			timestampedRequest.timestamp ? {id: timestampedRequest.timestamp.id + 1, stamp} : {id: 1, stamp};
+		return timestampedRequest;
+};
+*/
+
+RequestResponseTimeoutPatternFSM.startSyncSignalId = 99;
 RequestResponseTimeoutPatternFSM.sendRequestSignalId = 100;
 RequestResponseTimeoutPatternFSM.timeoutSignalId = 101;
-RequestResponseTimeoutPatternFSM.waitForRequestSignalId = 102;
+RequestResponseTimeoutPatternFSM.waitForResponseSignalId = 102;
 RequestResponseTimeoutPatternFSM.backToListeningSignalId = 103;
 RequestResponseTimeoutPatternFSM.responseReadySignalId = 104;
 RequestResponseTimeoutPatternFSM.dropResponseSignalId = 105;
@@ -275,39 +338,57 @@ RequestResponseTimeoutPatternFSM.prototype.init = function() {
 			response.timestamp.stamp === timestamp.stamp); 
 	}
 
-	const requestReadyToSendCallback = (state, req) => {
-		console.log("Request ready to send settled, request.timestamp: ", req);
+	
+//	const startingRetryRegisterCallback = (state, request) => { 
+	const startingRetryRegisterCallback = state => { 
 
-		this.retryRegister.run();
-		this.currTimestamp = this.genNextTimestamp();
-		this.retryRegister.shift(this.currTimestamp);
+//		request = this.genNextRequestTimestamp(request);
+		console.log("Starting Register settled, request: ");
 
-		req.timestamp = this.currTimestamp;
+		let timestamp = this.genNextRequestTimestamp();
+		this.retryRegister.shift(timestamp, this.retrialDelay);
 		
-		this.inputSignal({id: RequestResponseTimeoutPatternFSM.sendRequestSignalId, payload: req});
+		let sig = {id: RequestResponseTimeoutPatternFSM.sendRequestSignalId,
+//				payload: request };
+				payload: timestamp };
+
+		this.inputSignal(sig);
 	}
 
-	const requestSentCallback = (state, req) => { 
+//	const sendingRequestCallback = (state, req) => { 
+	const sendingRequestCallback = (state, timestamp) => { 
 	try {
-		console.log("Request sent settled, request.timestamp: ", req.timestamp.id);
-	//	this.currTimestamp = req.timestamp;
+//		console.log("Request sent settled, request: ", req);
+		console.log("Request sent settled, timestamp: ", timestamp);
 
-		this.inputSignal({id: RequestResponseTimeoutPatternFSM.waitForRequestSignalId, payload: req.timestamp});
+		this.request.timestamp = timestamp;
 
-		let retrial = req.timestamp.id;
-		this.onRequestSent && this.onRequestSent(req, retrial);
-	}catch (err) { console.log(err)}
+	//	req.timestamp = this.currTimestamp;
+
+		this.inputSignal({id: RequestResponseTimeoutPatternFSM.waitForResponseSignalId, })
+//			payload: req});
+//			payload: timestamp});
+
+		
+		this.onSendRequest && this.onSendRequest(this.request);
+	}
+	catch (err) { console.log(err)}
 	}
 
-	const waitingForResponseCallback = (state, timestamp) => {
-		console.log("Waiting for response ready settled, timestamp: ", timestamp.id);
+//	const waitingForResponseCallback = (state, timestamp) => {
+	const waitingForResponseCallback = () => {
+//		this.currentRequest = req;
+
+		console.log("Waiting for response ready settled");
+
 	}
 
 	const responseReadyCallback = (state, response) => { 
 		console.log("Response ready settled");
 
 		try {
-		if (validateResponse(response, this.currTimestamp)) {
+//		if (validateResponse(response, this.currTimestamp)) {
+		if (validateResponse(response, this.request.timestamp)) {
 			console.log("Response valid !!!, timestamp: ", response.timestamp.id)
 
 			this.inputSignal({id: RequestResponseTimeoutPatternFSM.backToListeningSignalId});
@@ -318,84 +399,46 @@ RequestResponseTimeoutPatternFSM.prototype.init = function() {
 			this.inputSignal({id: RequestResponseTimeoutPatternFSM.dropResponseSignalId});
 			console.log("after drop")
 
-			this.onResponseFailure && this.onResponseFailure(response);
+//			this.onResponseFailure && this.onResponseFailure(response);
 		}
-		} catch(err) {console.log(err)}
+		} catch(err) {console.log("err:", err)}
 	}
 
 	const backToListeningCallback = () => {
-		console.log("Back to listening settled, stopping shift reg.");
+		console.log("Back to listening settled, resetting shift reg.");
 
-	//	shiftRegFSM.reset();
 		this.retryRegister.stop();
+
+		this.retryRegister.run();
+
+//		this.currTimestamp = this.genNextTimestamp();
 	}
 
-	FSM.prototype.init.call(this, 
-		{	requestReadyToSend: {id: 1, on: requestReadyToSendCallback},
-			requestSent: {id: 2, on: requestSentCallback},
-			waitingForRequest: {id: 3, on: waitingForResponseCallback},
+	AsyncFSM.prototype.init.call(this, 
+		{	
+			startingRetryRegister: {id: 1, on: startingRetryRegisterCallback},
+			sendingRequest: {id: 2, on: sendingRequestCallback},
+			waitingForResponse: {id: 3, on: waitingForResponseCallback},
 			responseReady: {id: 4, on: responseReadyCallback},
 		} );
 
 	this.awaiting.on = backToListeningCallback;
 
-	this.awaiting.chain(RequestResponseTimeoutPatternFSM.makeRequestSignalId, this.requestReadyToSend)
-		.chain(RequestResponseTimeoutPatternFSM.sendRequestSignalId, this.requestSent)
-		.chain(RequestResponseTimeoutPatternFSM.waitForRequestSignalId, this.waitingForRequest)
+	this.awaiting
+		.chain(RequestResponseTimeoutPatternFSM.startSyncSignalId, this.startingRetryRegister)
+		.chain(RequestResponseTimeoutPatternFSM.sendRequestSignalId, this.sendingRequest)
+		.chain(RequestResponseTimeoutPatternFSM.waitForResponseSignalId, this.waitingForResponse)
 //		.chain(RequestResponseTimeoutPatternFSM.timeoutSignalId, this.requestSent)	
-		.chain(RequestResponseTimeoutPatternFSM.timeoutSignalId, this.makeRequestSignalId)	
+		.chain(RequestResponseTimeoutPatternFSM.timeoutSignalId, this.sendingRequest)	
 
-	this.waitingForRequest.chain(RequestResponseTimeoutPatternFSM.backToListeningSignalId, this.awaiting);
+	this.waitingForResponse.chain(RequestResponseTimeoutPatternFSM.backToListeningSignalId, this.awaiting);
 
-	this.waitingForRequest.chain(RequestResponseTimeoutPatternFSM.responseReadySignalId, this.responseReady)
-		.chain(RequestResponseTimeoutPatternFSM.dropResponseSignalId, this.waitingForRequest);
+	this.waitingForResponse.chain(RequestResponseTimeoutPatternFSM.responseReadySignalId, this.responseReady)
+		.chain(RequestResponseTimeoutPatternFSM.dropResponseSignalId, this.waitingForResponse);
 
 	this.responseReady.chain(RequestResponseTimeoutPatternFSM.backToListeningSignalId, this.awaiting);
 
-//	this.retryRegister.init();
-}
-
-RequestResponseTimeoutPatternFSM.prototype.send = function(request, retrials, retrialDelay) {
-	this.retryRegister = new ShiftRegisterFSM(retrials, retrialDelay, this.genNextTimestamp);
-//	this.retryRegister = new TimeStampGenShiftRegisterFSM(retrials, retrialDelay);
-
-	this.retryRegister.onIdle = () => { console.log("shift reg stopped"); }
-
-	//shiftRegFSM.onReset = () => { console.log("Shift reg. reset")}
-	this.retryRegister.onLastSettle = () => {
-		console.log("Last stage settled");
-
-		//	fsm1.inputSignal(sig);
-		this.inputSignal( { id: RequestResponseTimeoutPatternFSM.backToListeningSignalId,
-		 name: "Giving up => Back To  Waiting for Command" } );
-	}
-
-	this.retryRegister.onSettle = (state, timestamp) => {
-		console.log("Shift, timestamp: ", timestamp.id, "state:", state.name);
-
-		this.retryRegister.shift(timestamp);
-		this.currTimestamp = timestamp;
-
-//		this.retryRegister.shift();
-			
-		this.inputSignal({ id: RequestResponseTimeoutPatternFSM.timeoutSignalId,
-				payload: timestamp, name: "Response Timeout"});
-
-		console.log("Shift, new timestamp: ", timestamp.id, " passing " + "Response Timeout"+ " command");
-	//	currTimestamp = getNextTimestamp(timestamp);
-	}
-
 	this.retryRegister.init();
-
-	let sig = {id: RequestResponseTimeoutPatternFSM.makeRequestSignalId,
-				payload: request };
-
-	this.inputSignal(sig);
-}
-
-RequestResponseTimeoutPatternFSM.prototype.receive = function(response) {
-	this.inputSignal({id: RequestResponseTimeoutPatternFSM.responseReadySignalId,
-		payload: response});
 }
 
 const receiveResponseDelayed = (response, delay) => {
@@ -408,13 +451,27 @@ const receiveResponseDelayed = (response, delay) => {
 			
 		}, delay );
 }
-const simulateResponse = timestamp => { return { timestamp, responseDescr: "qwertz"} }
 
-let fsm1 = new RequestResponseTimeoutPatternFSM();
+RequestResponseTimeoutPatternFSM.prototype.send = function(request) {
+	this.request = request;
 
-fsm1.onRequestSent = (req, retrial) => { 
+	let sig = {id: RequestResponseTimeoutPatternFSM.startSyncSignalId,}
+//				payload: request };
+
+	this.inputSignal(sig);
+}
+
+RequestResponseTimeoutPatternFSM.prototype.receive = function(response) {
+	this.inputSignal({id: RequestResponseTimeoutPatternFSM.responseReadySignalId,
+		payload: response});
+}
+
+
+let fsm1 = new RequestResponseTimeoutPatternFSM(4, 1000);
+
+fsm1.onSendRequest = (req) => { 
 	console.log("Sending Request by User");
-	receiveResponseDelayed({timestamp: req.timestamp, message: "QQQ"}, 500); 
+	receiveResponseDelayed({timestamp: req.timestamp, message: "QQQ"}, 2500); 
 }
 /*
 fsm1.onRetry = (req) => { 
@@ -434,13 +491,44 @@ fsm1.onResponseFailure = (response) => {
 fsm1.init();
 fsm1.run();
 
-//fsm1.send({description: "My request"}, 4, 1500);
+fsm1.send({description: "My request"});
+/*
+const receiveDelayed = ( delay) => {
+	setTimeout( 
+		() => { 
+			console.log("Got simulated timeout ", delay, 
+				" ms, timestamp: ");
+			
+		}, delay );
+}
 
-let tfsm = new TimeStampGenShiftRegisterFSM(2, 100);
-tfsm.onSettle = (state, result) => {console.log("result=", result)}
-tfsm.init();
-tfsm.run();
-tfsm.shift();
-tfsm.shift();
 
+const genNextTimestamp = timestamp => {
+		try{
+		let stamp = new Date().getTime();
+		return timestamp ? {id: timestamp.id + 1, stamp} : {id: 1, stamp};
+	}
+	catch(err){console.log(err)}
+	};
 
+let shiftRegister = new ShiftRegisterFSM(4, genNextTimestamp);
+
+shiftRegister.onSettle = (state) => { 
+	shiftRegister.shift(undefined, 1000);
+	if ( state === shiftRegister.awaiting) return;
+	console.log(state.name);
+receiveDelayed(2500);
+}
+
+shiftRegister.init();
+shiftRegister.run();
+shiftRegister.stop();
+shiftRegister.run();
+
+shiftRegister.shift(undefined, 1000);
+receiveDelayed(2500)
+shiftRegister.shift(undefined, 1000);
+
+console.log("after all shifts sent")
+
+*/
