@@ -55,12 +55,15 @@ FSM.changeState = function(fsm, sig, state) {
 
 	if ( transition ) {
 		try {
-			fsm.onLeave && fsm.onLeave(state);
+			fsm.onLeave && fsm.onLeave(this, state);
 		}
 		// do not consume callback exceptions
 		finally	{
 			try	{	
-				result = (transition.callback && transition.callback(sig.payload)) || sig.payload;
+//				if (transition.callback) result = transition.callback(sig.payload, state);
+//				else result = sig.payload;
+				(transition.callback && (result = transition.callback(sig.payload, state)))
+						 || (result = sig.payload);
 //				console.log("result = ", result, "sig.payload: ", sig.payload)
 				state = transition.nextState;
 			}
@@ -68,10 +71,11 @@ FSM.changeState = function(fsm, sig, state) {
 				result = error;
 				console.log("FSM caught: ", error);
 
-				return transition.failureState || state;
+				state = transition.failureState || state;
 			}
-			(state.on && FSM.tryCallback(state.on, state)(state, result)) ||
-		 	(fsm.onSettle && FSM.tryCallback(fsm.onSettle, state)(state, result)); 
+			state.settledResult = undefined;
+			(state.on && (state.settledResult = FSM.tryCallback(state.on)(this, state, result)) ||
+		 	(fsm.onSettle && (state.settledResult = FSM.tryCallback(fsm.onSettle)(this, state, result)))); 
 		}
 	}
 	return state;		
@@ -90,14 +94,16 @@ function FSM() {
 	this.currState = this.idle;
 }
 
-FSM.tryCallback = (callback, fsmState) => {
+//FSM.tryCallback = (callback, fsmState) => {
+FSM.tryCallback = callback => {
 	return (...args) => {
+		let result;
 		try {
-			callback && callback(...args);
+			callback && (result = callback(...args));
 		}
 		// do not consume callback exceptions
 		finally {
-			return fsmState;
+			return result;
 		}
 	}
 }
@@ -132,7 +138,7 @@ FSM.prototype = (function () {
 	protoObj.stop  = function() {
 		this.currState = this.idle;
 
-		FSM.tryCallback(this.onIdle, this.idle)(this.idle, "FSM stopped");
+		FSM.tryCallback(this.onIdle)(this, this.idle, "FSM stopped");
 	}
 
 	protoObj.run = function() {
@@ -162,7 +168,7 @@ AsyncFSM.prototype.constructor = AsyncFSM;
 
 AsyncFSM.prototype.stop  = function() {
 	this.promise = new Promise((resolve, _) => {
-						FSM.tryCallback(this.onIdle, this.idle)(this.idle, "FSM stopped");
+						FSM.tryCallback(this.onIdle)(this, this.idle, "FSM stopped");
 						
 						resolve(this.idle);
 					});
