@@ -60,8 +60,7 @@ FSM.changeState = function(fsm, sig, state) {
 		// do not consume callback exceptions
 		finally	{
 			try	{	
-//				if (transition.callback) result = transition.callback(sig.payload, state);
-//				else result = sig.payload;
+
 				(transition.callback && (result = transition.callback(sig.payload, state)))
 						 || (result = sig.payload);
 //				console.log("result = ", result, "sig.payload: ", sig.payload)
@@ -148,6 +147,10 @@ FSM.prototype = (function () {
 	protoObj.inputSignal = function(sig) {
 
 		this.currState = FSM.changeState(this, sig, this.currState);
+	}
+
+	protoObj.inputSignalDelayed = function(sig, delay) {
+		setTimeout( () => { this.inputSignal(sig) }, delay );	
 	}
 
 	protoObj.onSettle;

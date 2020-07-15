@@ -2,7 +2,7 @@ import {FSM, AsyncFSM} from "./FSM.js"
 export {ShiftRegisterFSM, RequestResponseTimeoutPatternFSM}
 
 function ShiftRegisterFSM(length, transitionCallback, loopBack) {
-	AsyncFSM.call(this);
+	FSM.call(this);
 	
 	this.length = length;
 //	this.transitionDelay = transitionDelay;
@@ -10,7 +10,7 @@ function ShiftRegisterFSM(length, transitionCallback, loopBack) {
 	this.loopBack = loopBack;
 }
 
-ShiftRegisterFSM.prototype = Object.create(AsyncFSM.prototype);
+ShiftRegisterFSM.prototype = Object.create(FSM.prototype);
 ShiftRegisterFSM.prototype.constructor = ShiftRegisterFSM;
 ShiftRegisterFSM.shiftSignalID = 100;
 //ShiftRegisterFSM.resetSignalID = 101;
